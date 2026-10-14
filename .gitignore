@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.DS_Store
+
+# Your own data stays local: match exports can be large, odds and bets are personal.
+data/raw/*
+data/odds/*
+data/processed/*
+data/bankroll/*
+!data/*/.gitkeep

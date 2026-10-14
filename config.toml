@@ -1,0 +1,138 @@
+# LoL Worlds value-betting configuration.
+# Paths are relative to the project root.
+
+[bankroll]
+starting_bankroll = 500.0
+currency = "AUD"
+# Which [risk_profiles.*] block sizes your stakes. Default suits a high risk appetite.
+risk_profile = "aggressive"
+# Stakes are rounded DOWN to this increment (AUD), then dropped if below min_stake.
+stake_rounding = 0.50
+min_stake = 1.00
+
+[market]
+timezone = "Australia/Sydney"
+bookmakers = ["Sportsbet", "PointsBet"]
+# How the bookmaker margin is stripped to get a fair market probability:
+# "multiplicative" (proportional) or "power" (corrects favourite-longshot bias).
+devig_method = "power"
+
+[paths]
+matches = "data/raw/matches.csv"
+odds = "data/odds/odds.csv"
+# Used automatically when the files above don't exist yet, so the app runs out of the box.
+sample_matches = "data/sample/matches.csv"
+sample_odds = "data/sample/odds.csv"
+processed_dir = "data/processed"
+ledger = "data/bankroll/ledger.csv"
+
+# ---------------------------------------------------------------------------
+# Risk profiles. Every stake goes through the same pipeline:
+#   1. bet_prob = model_weight * model_prob + (1 - model_weight) * market_prob
+#   2. bets need EV >= min_ev, odds within [min_odds, max_odds], and the model may not
+#      disagree with the fair market price by more than max_prob_gap (a huge gap usually
+#      means the model is missing news - a roster sub, a patch - not a real edge)
+#   3. full Kelly is solved jointly across all of the day's bets (simultaneous Kelly)
+#   4. multiplied by kelly_fraction (halved again by the drawdown brake)
+#   5. capped at max_stake_pct per bet and max_exposure_pct across open bets
+# kelly_fraction is capped at 1.0: betting more than full Kelly lowers long-run
+# growth AND raises risk of ruin, so it is never "more aggressive" in a useful way.
+# ---------------------------------------------------------------------------
+
+[risk_profiles.conservative]
+kelly_fraction = 0.20
+model_weight = 0.50
+min_ev = 0.05
+max_prob_gap = 0.10
+min_odds = 1.30
+max_odds = 3.50
+max_stake_pct = 0.05
+max_exposure_pct = 0.20
+drawdown_brake_pct = 0.25
+drawdown_brake_multiplier = 0.5
+
+[risk_profiles.balanced]
+kelly_fraction = 0.33
+model_weight = 0.60
+min_ev = 0.04
+max_prob_gap = 0.15
+min_odds = 1.25
+max_odds = 4.00
+max_stake_pct = 0.08
+max_exposure_pct = 0.30
+drawdown_brake_pct = 0.30
+drawdown_brake_multiplier = 0.5
+
+[risk_profiles.aggressive]
+kelly_fraction = 0.50
+model_weight = 0.75
+min_ev = 0.03
+max_prob_gap = 0.20
+min_odds = 1.20
+max_odds = 5.00
+max_stake_pct = 0.15
+max_exposure_pct = 0.50
+drawdown_brake_pct = 0.40
+drawdown_brake_multiplier = 0.5
+
+[risk_profiles.maximum]
+kelly_fraction = 0.75
+model_weight = 0.85
+min_ev = 0.02
+max_prob_gap = 0.30
+min_odds = 1.15
+max_odds = 8.00
+max_stake_pct = 0.25
+max_exposure_pct = 0.75
+drawdown_brake_pct = 0.50
+drawdown_brake_multiplier = 0.5
+
+[elo]
+base_k = 24.0
+# International games are the only cross-region signal, so they move ratings more.
+international_k_multiplier = 1.5
+international_leagues = ["WLDs", "Worlds", "MSI", "FST", "First Stand", "EWC"]
+# Teams with fewer games than this get a larger K so they converge faster.
+new_team_games = 10
+new_team_k_multiplier = 1.5
+# Elo points added to the blue side for historical games (blue wins ~52-53% in pro play).
+blue_side_bonus = 15.0
+# Share of a team's rating above/below its region prior carried into a new year.
+season_carryover = 0.75
+# Margin-of-victory weights: dominant wins (gold lead @15, kill gap) move ratings more.
+mov_gold_weight = 0.5
+mov_kill_weight = 0.25
+default_rating = 1400.0
+
+# Starting rating for a team, by its home league. Major regions start higher so
+# the model doesn't need dozens of international games to learn the regional gap.
+[elo.region_priors]
+LCK = 1600.0
+LPL = 1600.0
+LEC = 1500.0
+LCS = 1450.0
+LTA = 1450.0
+LCP = 1430.0
+CBLOL = 1400.0
+PCS = 1400.0
+VCS = 1400.0
+LJL = 1380.0
+
+# Map bookmaker spellings to the names used in your match data.
+# Matching is already case-insensitive; add entries only for genuinely different names.
+[team_aliases]
+"GEN" = "Gen.G"
+"Gen.G Esports" = "Gen.G"
+"HLE" = "Hanwha Life Esports"
+"Hanwha Life" = "Hanwha Life Esports"
+"BLG" = "Bilibili Gaming"
+"AL" = "Anyone's Legend"
+"TES" = "Top Esports"
+"JDG" = "JD Gaming"
+"G2" = "G2 Esports"
+"FNC" = "Fnatic"
+"KC" = "Karmine Corp"
+"FLY" = "FlyQuest"
+"CFO" = "CTBC Flying Oyster"
+"DK" = "Dplus KIA"
+"KT" = "KT Rolster"
