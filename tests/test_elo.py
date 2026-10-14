@@ -37,7 +37,7 @@ def update(model, blue="A", red="B", blue_win=True, league="LCK", date="2026-03-
 def test_winner_gains_and_loser_loses(settings):
     model = EloModel(settings.elo, {"A": "LCK", "B": "LCK"})
     update(model)
-    assert model.rating("A") > 1600 > model.rating("B")
+    assert model.rating("A") > settings.elo.region_priors["LCK"] > model.rating("B")
 
 
 def test_region_priors_seed_new_teams(settings):
@@ -97,3 +97,10 @@ def test_fit_ranks_the_stronger_team_higher(settings):
     assert model.rating("A") > model.rating("B")
     assert len(history) == 40 and "p_blue" in history
     assert calibration_summary(history)["games"] > 0
+
+
+def test_side_unknown_games_get_no_blue_bonus(settings):
+    sided = update(EloModel(settings.elo, {"A": "LCK", "B": "LCK"}))
+    neutral = update(EloModel(settings.elo, {"A": "LCK", "B": "LCK"}), neutral=True)
+    assert neutral["p_blue"] == pytest.approx(0.5)
+    assert sided["p_blue"] > 0.5

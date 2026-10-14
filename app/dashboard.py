@@ -25,6 +25,7 @@ from lolworlds.bankroll import (  # noqa: E402
 )
 from lolworlds.config import RiskProfile, load_settings  # noqa: E402
 from lolworlds.elo import calibration_table, fair_odds, series_win_prob  # noqa: E402
+from lolworlds.fetch import fetch  # noqa: E402
 from lolworlds.ingest import build_ratings  # noqa: E402
 from lolworlds.ledger import Ledger, bankroll_history, bankroll_state  # noqa: E402
 from lolworlds.value import ODDS_REQUIRED, find_value, load_odds  # noqa: E402
@@ -89,9 +90,19 @@ def run_simulation(probs: tuple, odds: tuple, market: tuple, start: float, profi
     )
 
 
+def download_results() -> None:
+    with st.spinner("Downloading real results from the LoL Esports API..."):
+        games, fixtures = fetch(verbose=False)
+    settings.paths.matches.parent.mkdir(parents=True, exist_ok=True)
+    games.to_csv(settings.paths.matches, index=False)
+    fixtures.to_csv(settings.paths.fixtures, index=False)
+    st.cache_resource.clear()
+
+
 settings = get_settings()
-matches_path, matches_are_sample = settings.paths.matches_source()
-odds_path, odds_are_sample = settings.paths.odds_source()
+matches_path, odds_path = settings.paths.matches, settings.paths.odds
+if not matches_path.exists():
+    download_results()
 ratings = get_ratings(str(matches_path), matches_path.stat().st_mtime)
 odds_all = load_odds(odds_path, settings) if odds_path.exists() else pd.DataFrame(columns=ODDS_REQUIRED)
 ledger = Ledger(settings.paths.ledger)
@@ -141,11 +152,11 @@ with st.sidebar:
         profile = base
 
     st.header("Data")
-    st.caption(f"Matches: `{rel(matches_path)}`{' (sample)' if matches_are_sample else ''}  \n"
-               f"Odds: `{rel(odds_path)}`{' (sample)' if odds_are_sample else ''}  \n"
+    st.caption(f"Results: {len(ratings.games):,} games to {ratings.games.date.max():%d %b %Y}  \n"
+               f"Odds: `{rel(odds_path)}`  \n"
                f"Ledger: `{rel(ledger.path)}`")
-    if st.button("Reload data", width="stretch"):
-        st.cache_resource.clear()
+    if st.button("Download latest results", width="stretch"):
+        download_results()
         st.cache_data.clear()
         st.rerun()
 
@@ -153,13 +164,6 @@ with st.sidebar:
 st.title("LoL Worlds Value Finder")
 st.caption(f"Elo model vs {' / '.join(settings.bookmakers)} - {profile.name.title()} profile, "
            f"{profile.kelly_fraction:.2f}x Kelly - all times {settings.timezone}")
-if matches_are_sample or odds_are_sample:
-    st.warning(
-        "**Demo mode - synthetic data.** The bundled sample matches and odds are randomly generated; "
-        "none of the results or prices are real. Add `data/raw/matches.csv` (or an Oracle's Elixir export) "
-        "and `data/odds/odds.csv`, or use **Add a match** below, to switch to your own data.",
-        icon=":material/science:",
-    )
 
 # -- today's slate ----------------------------------------------------------
 today = pd.Timestamp.now(tz=settings.timezone).date()
@@ -311,8 +315,7 @@ with tab_slate:
             )
 
     with st.expander("Add a match", icon=":material/add:"):
-        st.caption(f"Saves to `{rel(settings.paths.odds)}`. Saving your first match switches the dashboard from "
-                   "sample odds to your own file.")
+        st.caption(f"Saves to `{rel(settings.paths.odds)}`.")
         teams = sorted(ratings.model.teams)
         with st.form("add_match", clear_on_submit=True):
             c = st.columns([1, 1, 1, 1])
@@ -367,8 +370,8 @@ with tab_elo:
     table = ratings.ratings[ratings.ratings.league.isin(pick)]
     st.dataframe(
         x100(table, ["win_rate"]), hide_index=True, height=420,
-        column_order=["rank", "team", "league", "rating", "games", "wins", "losses", "win_rate", "form",
-                      "avg_gd15", "avg_kill_diff", "avg_game_min"],
+        column_order=[c for c in ["rank", "team", "league", "rating", "games", "wins", "losses", "win_rate", "form",
+                                  "avg_gd15", "avg_kill_diff", "avg_game_min"] if table[c].notna().any()],
         column_config={
             "rank": "#", "team": "Team", "league": "League",
             "rating": st.column_config.NumberColumn("Elo", format="%.0f"),

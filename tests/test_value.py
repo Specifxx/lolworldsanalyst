@@ -114,15 +114,6 @@ def test_only_one_side_per_match_is_selected():
     assert picked.selection.tolist() == ["B", "C"]
 
 
-def test_bundled_sample_odds_load(settings):
-    from lolworlds.value import load_odds
-
-    odds = load_odds(settings.paths.sample_odds, settings)
-    assert set(odds.bookmaker) == {"Sportsbet", "PointsBet"}
-    assert (odds.odds_a > 1).all() and (odds.odds_b > 1).all()
-    assert str(odds.start_time.dt.tz) == settings.timezone
-
-
 def test_blank_stage_and_event_become_empty_strings(settings):
     odds = odds_frame(settings, [{"bookmaker": "Sportsbet", "odds_a": 1.8, "odds_b": 2.0,
                                   "stage": float("nan"), "event": None}])

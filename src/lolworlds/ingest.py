@@ -3,15 +3,17 @@
 Accepts either of two CSV layouts:
 
 * **Native** - one row per game: ``date, league, blue_team, red_team, winner`` plus
-  optional ``event, series_id, game_no, best_of, duration_min, gd15, blue_kills,
-  red_kills, blue_towers, red_towers, blue_dragons, red_dragons, blue_barons,
-  red_barons``. ``winner`` may be a team name or ``blue``/``red``; ``gd15`` is blue's
-  gold lead at 15 minutes.
+  optional ``event, series_id, game_no, best_of, sides_known, duration_min, gd15,
+  blue_kills, red_kills, blue_towers, red_towers, blue_dragons, red_dragons,
+  blue_barons, red_barons``. ``winner`` may be a team name or ``blue``/``red``;
+  ``gd15`` is blue's gold lead at 15 minutes. ``python -m lolworlds.fetch`` writes this
+  format from the official LoL Esports API (with ``sides_known = False``).
 * **Oracle's Elixir** - the public per-player/per-team match data export
   (detected automatically; only the ``position == "team"`` rows are used).
 
 Run::
 
+    python -m lolworlds.fetch                        # download real results first
     python -m lolworlds.ingest                       # uses paths from config.toml
     python -m lolworlds.ingest --input data/raw/2026_LoL_esports_match_data.csv
 """
@@ -99,6 +101,9 @@ def clean_games(df: pd.DataFrame) -> pd.DataFrame:
         g["game_no"] = 1
     if "best_of" not in g:
         g["best_of"] = np.nan
+    if "sides_known" not in g:
+        g["sides_known"] = True
+    g["sides_known"] = g["sides_known"].map(lambda v: str(v).strip().lower() not in ("false", "0", "no")).astype(bool)
     for name in METRIC_COLUMNS:
         g[name] = pd.to_numeric(g[name], errors="coerce") if name in g else np.nan
 
@@ -143,6 +148,7 @@ def team_perspective(games: pd.DataFrame) -> pd.DataFrame:
                     "date": games["date"],
                     "league": games["league"],
                     "side": side,
+                    "sides_known": games["sides_known"],
                     "win": games["blue_win"] if sign == 1 else 1 - games["blue_win"],
                     "gd15": sign * games["gd15"],
                     "kill_diff": games[f"{side}_kills"] - games[f"{opp}_kills"],
@@ -172,7 +178,7 @@ def team_metrics(games: pd.DataFrame, last_n: int = 10) -> pd.DataFrame:
         avg_kill_diff=("kill_diff", "mean"),
         avg_game_min=("duration_min", "mean"),
     )
-    by_side = long.groupby(["team", "side"]).win.mean().unstack()
+    by_side = long[long.sides_known].groupby(["team", "side"]).win.mean().unstack()
     overall = overall.join(by_side.add_suffix("_win_rate"))
     form = recent.groupby("team").agg(
         form_win_rate=("win", "mean"),
@@ -193,14 +199,12 @@ class IngestResult:
     ratings: pd.DataFrame
     calibration: dict
     source: Path
-    is_sample: bool
 
 
 def build_ratings(settings: Settings, input_path: str | Path | None = None) -> IngestResult:
-    if input_path is not None:
-        source, is_sample = Path(input_path), False
-    else:
-        source, is_sample = settings.paths.matches_source()
+    source = Path(input_path) if input_path is not None else settings.paths.matches
+    if not source.exists():
+        raise FileNotFoundError(f"{source} not found - run `python -m lolworlds.fetch` to download real results")
     games = load_games(source)
     if games.empty:
         raise ValueError(f"no usable games found in {source}")
@@ -215,7 +219,6 @@ def build_ratings(settings: Settings, input_path: str | Path | None = None) -> I
         ratings=ratings,
         calibration=calibration_summary(history),
         source=source,
-        is_sample=is_sample,
     )
 
 
@@ -240,8 +243,7 @@ def main(argv: list[str] | None = None) -> None:
     result = build_ratings(settings, args.input)
     written = save_outputs(result, args.output_dir or settings.paths.processed_dir)
 
-    label = " (bundled SAMPLE data - synthetic)" if result.is_sample else ""
-    print(f"Loaded {len(result.games):,} games from {result.source}{label}")
+    print(f"Loaded {len(result.games):,} games from {result.source}")
     print(f"Date range: {result.games.date.min():%Y-%m-%d} to {result.games.date.max():%Y-%m-%d}")
     cal = result.calibration
     print(

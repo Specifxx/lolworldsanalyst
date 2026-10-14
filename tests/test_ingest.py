@@ -90,8 +90,21 @@ def test_team_metrics_signs_stats_per_team():
     assert m.loc["A", "form"] == "1-0" and m.loc["B", "form"] == "0-1"
 
 
-def test_build_ratings_on_bundled_sample(settings):
-    result = build_ratings(settings, settings.paths.sample_matches)
-    assert len(result.games) > 1000
-    assert result.ratings.rating.is_monotonic_decreasing
-    assert 0.55 < result.calibration["log_loss"] < 0.70  # better than a coin flip (0.693)
+def test_build_ratings_end_to_end(settings, tmp_path):
+    rows = []
+    for i in range(60):
+        strong_wins = i % 3 != 0
+        rows.append({"date": f"2026-0{1 + i // 20}-{1 + i % 20:02d}", "league": "LCK" if i % 2 else "LEC",
+                     "blue_team": "Strong", "red_team": "Weak", "winner": "Strong" if strong_wins else "Weak",
+                     "sides_known": False})
+    path = tmp_path / "matches.csv"
+    pd.DataFrame(rows).to_csv(path, index=False)
+    result = build_ratings(settings, path)
+    assert len(result.games) == 60
+    assert not result.games.sides_known.any()  # "False" strings from CSV parsed as booleans
+    assert result.ratings.team.tolist() == ["Strong", "Weak"]
+
+
+def test_missing_match_file_points_to_fetch(settings, tmp_path):
+    with pytest.raises(FileNotFoundError, match="lolworlds.fetch"):
+        build_ratings(settings, tmp_path / "nope.csv")

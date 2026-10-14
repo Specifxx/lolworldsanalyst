@@ -68,18 +68,10 @@ class EloSettings:
 @dataclass(frozen=True)
 class Paths:
     matches: Path
+    fixtures: Path
     odds: Path
-    sample_matches: Path
-    sample_odds: Path
     processed_dir: Path
     ledger: Path
-
-    def matches_source(self) -> tuple[Path, bool]:
-        """Return the match file to use and whether it is the bundled sample."""
-        return (self.matches, False) if self.matches.exists() else (self.sample_matches, True)
-
-    def odds_source(self) -> tuple[Path, bool]:
-        return (self.odds, False) if self.odds.exists() else (self.sample_odds, True)
 
 
 @dataclass(frozen=True)

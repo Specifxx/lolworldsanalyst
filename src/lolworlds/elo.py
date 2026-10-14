@@ -110,13 +110,17 @@ class EloModel:
         league: str,
         gd15: float = math.nan,
         kill_diff: float = math.nan,
+        neutral: bool = False,
     ) -> dict:
-        """Apply one game. ``gd15``/``kill_diff`` are from blue's perspective."""
+        """Apply one game. ``gd15``/``kill_diff`` are from blue's perspective.
+
+        ``neutral=True`` means the sides aren't known, so no blue-side bonus is applied.
+        """
         sb, sr = self._state(blue), self._state(red)
         for state in (sb, sr):
             self._regress_to_prior(state, date.year)
 
-        bonus = self.settings.blue_side_bonus
+        bonus = 0.0 if neutral else self.settings.blue_side_bonus
         p_blue = expected_score(sb.rating + bonus, sr.rating)
         sign = 1.0 if blue_win else -1.0
         mult = self._mov_multiplier(sign * gd15, sign * kill_diff, sign * (sb.rating + bonus - sr.rating))
@@ -152,6 +156,7 @@ class EloModel:
                 league=g.league,
                 gd15=float(g.gd15),
                 kill_diff=float(g.blue_kills - g.red_kills),
+                neutral=not getattr(g, "sides_known", True),
             )
             for g in games.itertuples(index=False)
         ]

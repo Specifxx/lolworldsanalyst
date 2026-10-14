@@ -20,7 +20,9 @@ dependencies = [
 dev = ["pytest>=8.0"]
 
 [project.scripts]
+lolworlds-fetch = "lolworlds.fetch:main"
 lolworlds-ingest = "lolworlds.ingest:main"
+lolworlds-picks = "lolworlds.picks:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

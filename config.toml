@@ -18,11 +18,11 @@ bookmakers = ["Sportsbet", "PointsBet"]
 devig_method = "power"
 
 [paths]
+# matches.csv and fixtures.csv are written by `python -m lolworlds.fetch` (real results
+# from the official LoL Esports API). You can also drop in an Oracle's Elixir export.
 matches = "data/raw/matches.csv"
+fixtures = "data/raw/fixtures.csv"
 odds = "data/odds/odds.csv"
-# Used automatically when the files above don't exist yet, so the app runs out of the box.
-sample_matches = "data/sample/matches.csv"
-sample_odds = "data/sample/odds.csv"
 processed_dir = "data/processed"
 ledger = "data/bankroll/ledger.csv"
 
@@ -91,11 +91,13 @@ drawdown_brake_multiplier = 0.5
 base_k = 24.0
 # International games are the only cross-region signal, so they move ratings more.
 international_k_multiplier = 1.5
-international_leagues = ["WLDs", "Worlds", "MSI", "FST", "First Stand", "EWC"]
+# AMC = Americas Cup, LTA = 2025 LTA cross-conference (both cross-region).
+international_leagues = ["WLDs", "Worlds", "MSI", "FST", "First Stand", "EWC", "AMC", "LTA"]
 # Teams with fewer games than this get a larger K so they converge faster.
 new_team_games = 10
 new_team_k_multiplier = 1.5
 # Elo points added to the blue side for historical games (blue wins ~52-53% in pro play).
+# Not applied to games whose sides are unknown (the LoL Esports API only gives series scores).
 blue_side_bonus = 15.0
 # Share of a team's rating above/below its region prior carried into a new year.
 season_carryover = 0.75
@@ -106,33 +108,45 @@ default_rating = 1400.0
 
 # Starting rating for a team, by its home league. Major regions start higher so
 # the model doesn't need dozens of international games to learn the regional gap.
+# Tuned on 2025-26 results: these gaps gave the best log loss on international games.
 [elo.region_priors]
-LCK = 1600.0
-LPL = 1600.0
+LCK = 1650.0
+LPL = 1650.0
 LEC = 1500.0
-LCS = 1450.0
-LTA = 1450.0
-LCP = 1430.0
-CBLOL = 1400.0
-PCS = 1400.0
-VCS = 1400.0
-LJL = 1380.0
+LCS = 1425.0
+LTA = 1425.0
+LCP = 1395.0
+CBLOL = 1350.0
+PCS = 1350.0
+VCS = 1350.0
+LJL = 1320.0
 
 # Map bookmaker spellings to the names used in your match data.
 # Matching is already case-insensitive; add entries only for genuinely different names.
 [team_aliases]
-"GEN" = "Gen.G"
-"Gen.G Esports" = "Gen.G"
+"GEN" = "Gen.G Esports"
+"Gen.G" = "Gen.G Esports"
 "HLE" = "Hanwha Life Esports"
 "Hanwha Life" = "Hanwha Life Esports"
-"BLG" = "Bilibili Gaming"
+"BLG" = "BILIBILI GAMING"
 "AL" = "Anyone's Legend"
-"TES" = "Top Esports"
-"JDG" = "JD Gaming"
+"TES" = "TOP ESPORTS"
+"JDG" = "Beijing JDG Esports"
+"JD Gaming" = "Beijing JDG Esports"
 "G2" = "G2 Esports"
 "FNC" = "Fnatic"
 "KC" = "Karmine Corp"
 "FLY" = "FlyQuest"
+"C9" = "Cloud9 Kia"
+"Cloud9" = "Cloud9 Kia"
+"TL" = "Team Liquid Alienware"
+"Team Liquid" = "Team Liquid Alienware"
+"MVK" = "MVK Esports"
+"NIP" = "Shenzhen NINJAS IN PYJAMAS"
+"Ninjas in Pyjamas" = "Shenzhen NINJAS IN PYJAMAS"
+"WBG" = "WeiboGaming"
+"Weibo Gaming" = "WeiboGaming"
+"TSW" = "Team Secret Whales"
 "CFO" = "CTBC Flying Oyster"
 "DK" = "Dplus KIA"
-"KT" = "KT Rolster"
+"KT" = "kt Rolster"
