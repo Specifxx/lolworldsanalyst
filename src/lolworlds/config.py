@@ -58,6 +58,7 @@ class EloSettings:
     mov_kill_weight: float
     default_rating: float
     region_priors: dict[str, float]
+    series_concentration: float = 0.0
 
     def prior_for(self, league: str | None) -> float:
         if league is None:

@@ -23,6 +23,7 @@ dev = ["pytest>=8.0"]
 lolworlds-fetch = "lolworlds.fetch:main"
 lolworlds-ingest = "lolworlds.ingest:main"
 lolworlds-picks = "lolworlds.picks:main"
+lolworlds-pointsbet = "lolworlds.pointsbet:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

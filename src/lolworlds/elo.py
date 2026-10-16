@@ -20,14 +20,30 @@ def expected_score(rating_a: float, rating_b: float) -> float:
     return 1.0 / (1.0 + 10.0 ** ((rating_b - rating_a) / 400.0))
 
 
-def series_win_prob(p_map: float, best_of: int) -> float:
+def _log_beta(x: float, y: float) -> float:
+    return math.lgamma(x) + math.lgamma(y) - math.lgamma(x + y)
+
+
+def score_sequence_prob(p_map: float, wins: int, losses: int, concentration: float = 0.0) -> float:
+    """Probability of one specific map sequence with this many wins and losses.
+
+    With ``concentration`` > 0 maps are linked: each series draws its own map win
+    probability from a Beta distribution centred on ``p_map`` (beta-binomial), which
+    produces the extra sweeps seen in real series. 0 means independent maps.
+    """
+    if concentration <= 0:
+        return p_map**wins * (1 - p_map) ** losses
+    a, b = p_map * concentration, (1 - p_map) * concentration
+    return math.exp(_log_beta(a + wins, b + losses) - _log_beta(a, b))
+
+
+def series_win_prob(p_map: float, best_of: int, concentration: float = 0.0) -> float:
     """Probability of winning a best-of-N series given a per-map win probability."""
     if best_of < 1 or best_of % 2 == 0:
         raise ValueError(f"best_of must be a positive odd number, got {best_of}")
     need = best_of // 2 + 1
-    q = 1.0 - p_map
     # Win the final map after k losses spread over the earlier maps.
-    return sum(math.comb(need - 1 + k, k) * p_map**need * q**k for k in range(need))
+    return sum(math.comb(need - 1 + k, k) * score_sequence_prob(p_map, need, k, concentration) for k in range(need))
 
 
 def fair_odds(prob: float) -> float:
@@ -65,7 +81,7 @@ class EloModel:
         return expected_score(self.rating(team_a) + bonus.get(a_side, 0.0), self.rating(team_b))
 
     def predict_series(self, team_a: str, team_b: str, best_of: int = 3) -> float:
-        return series_win_prob(self.predict_map(team_a, team_b), best_of)
+        return series_win_prob(self.predict_map(team_a, team_b), best_of, self.settings.series_concentration)
 
     # -- updates ------------------------------------------------------------
     def _state(self, team: str) -> TeamState:

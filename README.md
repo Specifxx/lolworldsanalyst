@@ -4,17 +4,24 @@ A Python toolkit and Streamlit dashboard for betting on the League of Legends Wo
 
 1. **Downloads real results** (every top-league and international series since 2025) from the official LoL
    Esports API and builds **Elo ratings**.
-2. **Prices** each match from the model and compares it with **Sportsbet** and **PointsBet** decimal odds to find **+EV** bets.
+2. **Pulls every PointsBet LoL Worlds market automatically** (or from a pasted PointsBet link) and prices the
+   series markets (match result, maps handicap, total maps, correct score, map winner) to find **+EV** bets.
 3. **Sizes** stakes with an **optimised fractional Kelly** bankroll manager tuned for a high risk appetite (default bankroll **$500 AUD**).
-4. **Reports** picks for upcoming Worlds matches: model win %, the minimum price worth taking and the exact
-   stake at each price. There is also an optional Streamlit dashboard.
+4. **Reports** the bets to place with exact stakes, plus every priced market, as a text report or in the
+   Streamlit dashboard. Matches PointsBet hasn't listed yet get the minimum price worth taking instead.
 
 ## Quick start
 
 ```bash
 pip install -r requirements.txt        # Python 3.11+
 python -m lolworlds.fetch              # download real results + upcoming Worlds fixtures (~1 min)
-python -m lolworlds.picks              # picks for the next 3 days
+python -m lolworlds.picks              # bets to place, from live PointsBet markets
+```
+
+To check one match or competition, pass its PointsBet page link:
+
+```bash
+python -m lolworlds.picks --link "https://pointsbet.com.au/sports/e-sports/[LoL]-World-Championship/2930260"
 ```
 
 Optional:
@@ -38,7 +45,9 @@ src/lolworlds/
   value.py                     de-vig, best price per side, model vs market, +EV selection
   bankroll.py                  simultaneous + fractional Kelly, caps, drawdown brake, Monte Carlo
   ledger.py                    bet ledger (CSV) and bankroll tracking
-  picks.py                     text report of picks for upcoming fixtures
+  pointsbet.py                 downloads every LoL market from PointsBet (auto or from a pasted link)
+  markets.py                   prices series markets (handicap, totals, correct score...) and sizes them jointly
+  picks.py                     text report: bets to place + every priced market
 data/
   raw/                         downloaded matches.csv + fixtures.csv (git-ignored)
   odds/                        your odds.csv (git-ignored)
@@ -76,11 +85,27 @@ You can use richer data instead. Any of these formats is detected automatically:
 | `blue_kills`, `red_kills` | no | also feeds the margin-of-victory multiplier |
 | `game_id`, `event`, `series_id`, `game_no`, `best_of`, `duration_min`, `*_towers`, `*_dragons`, `*_barons` | no | |
 
-### Odds: `data/odds/odds.csv` (optional)
+### PointsBet odds (automatic)
 
-Sportsbet and PointsBet don't publish a data feed, so prices are never downloaded. Without them, `picks` gives
-the **minimum price** worth betting at and the stake at each price, which you compare with the apps yourself.
-To get exact recommendations, enter prices here: one row per match per bookmaker. Add rows in the dashboard (**Add a match**, below the slate) or edit the CSV:
+`picks` and the dashboard's **PointsBet markets** tab read the same data the pointsbet.com.au website loads. With
+no link they find PointsBet's "[LoL] World Championship" competition and load every open match. A pasted match or
+competition link loads just that page. This is PointsBet's **unofficial** website API: it can change or be blocked
+without notice, in which case the report says so. Odds are cached for 5 minutes in the dashboard (press
+**Refresh odds**).
+
+Sportsbet blocks automated access from the servers this was tested on, so it isn't imported. To compare a
+Sportsbet price, enter it manually below.
+
+What gets priced:
+
+| Market | Priced? |
+|---|---|
+| Match result, maps handicap (±1.5, ±2.5), total maps (over/under), correct score, map N winner | Yes, from the Elo model |
+| Race to N kills, kill handicap, first blood, odd/even kills | Not yet: needs per-game kill data the model doesn't have |
+
+### Manual odds: `data/odds/odds.csv` (optional)
+
+For a bookmaker that isn't imported, enter head-to-head prices here: one row per match per bookmaker. Add rows in the dashboard (**Add a match**, below the slate) or edit the CSV:
 
 ```csv
 match_id,start_time,event,stage,best_of,team_a,team_b,bookmaker,odds_a,odds_b
@@ -90,8 +115,9 @@ W26-QF1,2026-10-24T19:00:00+11:00,Worlds 2026,Quarterfinal,5,Gen.G,Bilibili Gami
 
 - `start_time` needs a UTC offset (AEDT is `+11:00`). The dashboard groups matches by Sydney date.
 - Odds are **head-to-head (match winner)** decimal prices. `best_of` must match the market: a Bo1 price is a single-map price.
-- If a bookmaker spells a team differently from your match data, add it to `[team_aliases]` in `config.toml`.
-  Matching is already case-insensitive. A team the model has never seen is shown but never bet.
+- Team names are matched automatically: exact, then `[team_aliases]` in `config.toml`, then case-insensitive,
+  then ignoring filler words (so "FURIA Esports" finds "FURIA" and "Cloud9" finds "Cloud9 Kia"). A team the
+  model has never seen is shown but never bet.
 
 ## How it works
 
@@ -112,7 +138,28 @@ W26-QF1,2026-10-24T19:00:00+11:00,Worlds 2026,Quarterfinal,5,Gen.G,Bilibili Gami
   0.223, versus 0.693 / 0.25 for a coin flip), and do slightly better on international games (log loss 0.618).
   `picks`, `ingest` and the dashboard's **Elo ratings** tab all report these. Every parameter is in `config.toml`.
 
-### 2. Value engine (`value.py`)
+### 2. Series markets (`markets.py`)
+
+Every way a series can play out is enumerated as a map-by-map sequence (20 for a Bo5). Anything the series
+settles is then priced exactly: match result, maps handicap, total maps, correct score, and map N winner (void if
+that map isn't played).
+
+**Maps are linked, not independent.** In the 2025–26 data, sweeps happen more often than independent maps
+predict (Bo5: 36.7% actual vs 30.9% predicted; Bo3: 58.9% vs 55.8%). So each series draws its own map-win
+probability around the Elo estimate (a beta-binomial model). Its one parameter, `series_concentration = 13`, was
+fitted by maximum likelihood on 1,687 Bo3/Bo5 series. It brings predicted sweeps in line with reality (Bo5 35.8%,
+Bo3 59.0%). Without it, the model overrates "underdog +maps" and "over maps" bets.
+
+The model's map probability is blended with the market's (backed out of the match-result price) by
+`model_weight`, and every selection is priced from the blend. If the model and market disagree on the match
+result by more than `max_prob_gap`, nothing on that match is bet.
+
+**Joint sizing:** bets on the same match win and lose together (Team −1.5 maps and Team 3-0 are mostly the same
+bet). Stakes are solved jointly over every combination of series results across the day's matches, so the
+optimiser picks the best mix rather than stacking correlated bets. A +EV selection can get $0 ("covered") when a
+linked bet already captures its edge.
+
+### 3. Value engine for manual head-to-head odds (`value.py`)
 
 For each match:
 
@@ -127,7 +174,7 @@ For each match:
    roster sub, a patch, a visa issue), not a real edge.
 5. At most one side per match: the higher-EV one.
 
-### 3. Bankroll management (`bankroll.py`)
+### 4. Bankroll management (`bankroll.py`)
 
 The Kelly criterion maximises long-run bankroll growth. This implementation adds the following for a
 same-day slate of bets:
@@ -164,7 +211,10 @@ happens if your edge is only partly real.
 
 - **Sidebar**: ledger bankroll (starting $500 + settled P/L, or override with your live account balances), risk
   profile and fine-tune sliders, data sources, reload.
-- **Today's slate**: match day picker (defaults to today in Sydney time), KPIs, a matches table with both books'
+- **PointsBet markets** (main tab): loads every open LoL Worlds match from PointsBet (or paste a link). It shows
+  **bets to place with exact stakes**, a box to log the ones you placed, and every market per match with model vs
+  market probability, EV, and why each selection was or wasn't bet.
+- **Manual odds**: for prices you type in yourself: match day picker (defaults to today in Sydney time), KPIs, a matches table with both books'
   prices (best price highlighted), **recommended bets with exact stakes**, a box to tick the bets you placed and log
   them to the ledger, an "All sides" breakdown explaining why each side was or wasn't bet, and **Add a match**.
 - **Elo ratings**: ratings table with form and early-game stats, matchup calculator (fair odds for any Bo1/3/5),
@@ -176,9 +226,9 @@ happens if your edge is only partly real.
 ### Daily workflow
 
 1. Run `python -m lolworlds.fetch` (or press **Download latest results** in the dashboard) to pick up new results.
-2. Run `python -m lolworlds.picks` for minimum prices, or enter the day's Sportsbet and PointsBet prices with
-   **Add a match** (or in `data/odds/odds.csv`) for exact stakes.
-3. Check the recommendations. Read the *All sides* table for anything flagged "check news".
+2. Run `python -m lolworlds.picks`, or open the **PointsBet markets** tab. Both load the current PointsBet prices
+   themselves.
+3. Check the bets. Anything flagged "check news" means the model and market disagree a lot.
 4. Place the bets, tick them in **Log bets you placed** (adjust odds or stake to what you actually got), and save.
 5. After the matches, settle them in **Bankroll & bets**. The next day's stakes size off the new bankroll.
 
@@ -188,8 +238,8 @@ happens if your edge is only partly real.
   model is better than a coin flip, not that it beats bookmakers, who also price in information the model lacks.
 - An Elo model knows nothing about roster changes, substitutes, patches or meta shifts. Bookmakers do. Treat big
   model-vs-market gaps with suspicion; the `max_prob_gap` filter exists for that reason.
-- Series prices assume maps are independent. Real maps within a series are correlated (draft adaptation,
-  momentum, tilt), so Bo3/Bo5 prices can be off in either direction.
+- Map correlation is modelled with one league-wide parameter. Individual teams may be streakier or steadier
+  than average.
 - Australian bookmakers can limit accounts that win consistently. Stake limits may cap what you can actually get on.
 - Past model accuracy (see calibration) doesn't guarantee future returns.
 

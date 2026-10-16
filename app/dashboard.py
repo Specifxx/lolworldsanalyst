@@ -24,10 +24,13 @@ from lolworlds.bankroll import (  # noqa: E402
     suggest_multiplier,
 )
 from lolworlds.config import RiskProfile, load_settings  # noqa: E402
-from lolworlds.elo import calibration_table, fair_odds, series_win_prob  # noqa: E402
+from lolworlds.elo import calibration_table, fair_odds  # noqa: E402
 from lolworlds.fetch import fetch  # noqa: E402
 from lolworlds.ingest import build_ratings  # noqa: E402
+from lolworlds import pointsbet  # noqa: E402
 from lolworlds.ledger import Ledger, bankroll_history, bankroll_state  # noqa: E402
+from lolworlds.markets import KIND_LABELS  # noqa: E402
+from lolworlds.picks import analyse_markets  # noqa: E402
 from lolworlds.value import ODDS_REQUIRED, find_value, load_odds  # noqa: E402
 
 st.set_page_config(page_title="LoL Worlds Value Finder", layout="wide")
@@ -97,6 +100,15 @@ def download_results() -> None:
     games.to_csv(settings.paths.matches, index=False)
     fixtures.to_csv(settings.paths.fixtures, index=False)
     st.cache_resource.clear()
+
+
+@st.cache_data(ttl=300, show_spinner="Loading PointsBet markets...")
+def load_pointsbet(link: str) -> tuple[list, str]:
+    """All open LoL Worlds matches on PointsBet (or just the linked one). Cached for 5 minutes."""
+    try:
+        return (pointsbet.fetch_link(link) if link else pointsbet.fetch_worlds()), ""
+    except pointsbet.PointsBetError as err:
+        return [], str(err)
 
 
 settings = get_settings()
@@ -187,7 +199,124 @@ if days:
                       stake_rounding=settings.stake_rounding, min_stake=settings.min_stake),
     )
 
-tab_slate, tab_elo, tab_bank, tab_sim = st.tabs(["Today's slate", "Elo ratings", "Bankroll & bets", "Risk simulator"])
+tab_pb, tab_slate, tab_elo, tab_bank, tab_sim = st.tabs(
+    ["PointsBet markets", "Manual odds", "Elo ratings", "Bankroll & bets", "Risk simulator"])
+
+with tab_pb:
+    c = st.columns([5, 1], vertical_alignment="bottom")
+    link = c[0].text_input("PointsBet link (optional)", key="pb_link",
+                           placeholder="Leave empty for every LoL Worlds match, or paste a match / competition link")
+    if c[1].button("Refresh odds", width="stretch"):
+        load_pointsbet.clear()
+        st.rerun()
+    pb_matches, pb_error = load_pointsbet(link.strip())
+    pb_matches = [m for m in pb_matches if m.start_time >= pd.Timestamp.now(tz="UTC")]
+    if pb_error:
+        st.error(f"Couldn't load PointsBet: {pb_error}")
+    elif not pb_matches:
+        st.info("PointsBet has no open LoL Worlds matches right now.")
+    else:
+        pb_ctx = SizingContext(bankroll=bankroll, peak_bankroll=peak, open_exposure=state.open_exposure,
+                               stake_rounding=settings.stake_rounding, min_stake=settings.min_stake)
+        priced, pb_stakes = analyse_markets(pb_matches, ratings.model, settings, profile, pb_ctx,
+                                            skip_match_ids=set(open_bets.match_id.astype(str)))
+        to_bet = pb_stakes[pb_stakes.stake > 0] if not pb_stakes.empty else pb_stakes
+        n_priced = sum(int(tbl.kind.isin(KIND_LABELS).sum()) for tbl, _ in priced.values())
+        k = st.columns(4)
+        k[0].metric("Matches", len(pb_matches), border=True)
+        k[1].metric("Prices checked", n_priced, border=True,
+                    help="Match result, maps handicap, total maps, correct score and map winner selections")
+        k[2].metric("Bets to place", len(to_bet), border=True)
+        k[3].metric("Total stake", money(float(to_bet.stake.sum()) if not to_bet.empty else 0.0), border=True,
+                    delta=f"exp. profit {money(float(to_bet.expected_profit.sum()))}" if not to_bet.empty else None,
+                    delta_color="off", delta_arrow="off")
+
+        st.subheader("Bets to place")
+        if to_bet.empty:
+            st.info("No PointsBet price clears your profile's filters right now. Every market is listed below.")
+        else:
+            st.dataframe(
+                x100(to_bet.assign(time=to_bet.start_time.dt.tz_convert(settings.timezone).dt.strftime("%a %H:%M")),
+                     ["model_prob", "market_prob", "bet_prob", "ev"]),
+                hide_index=True,
+                column_order=["time", "match", "market", "selection", "odds", "model_prob", "market_prob", "ev",
+                              "stake", "to_return", "notes"],
+                column_config={
+                    "time": "Start", "match": "Match", "market": "Market", "selection": "Bet",
+                    "odds": st.column_config.NumberColumn("Odds", format="%.2f"),
+                    "model_prob": st.column_config.NumberColumn("Model", format="%.1f%%"),
+                    "market_prob": st.column_config.NumberColumn("Market", format="%.1f%%"),
+                    "ev": st.column_config.NumberColumn("EV", format="%.1f%%"),
+                    "stake": st.column_config.NumberColumn("Stake", format="dollar"),
+                    "to_return": st.column_config.NumberColumn("Returns", format="dollar"),
+                    "notes": "Notes",
+                },
+            )
+            st.caption("Bets on the same match are sized together, because they win and lose together.")
+            with st.container(border=True):
+                st.markdown("**Log bets you placed** - tick them, adjust to the price/stake you got, then save.")
+                plog = to_bet[["match_id", "start_time", "match", "market", "selection", "team_a", "team_b",
+                               "odds", "stake", "bet_prob", "ev"]].copy()
+                plog.insert(0, "placed", False)
+                pedit = st.data_editor(
+                    plog, hide_index=True, key=f"pblog_{st.session_state.log_version}",
+                    column_order=["placed", "match", "market", "selection", "odds", "stake"],
+                    disabled=["match", "market", "selection"],
+                    column_config={
+                        "placed": st.column_config.CheckboxColumn("Placed"),
+                        "match": "Match", "market": "Market", "selection": "Bet",
+                        "odds": st.column_config.NumberColumn("Odds taken", min_value=1.01, format="%.2f"),
+                        "stake": st.column_config.NumberColumn("Stake", min_value=0.0, format="dollar"),
+                    },
+                )
+                if st.button("Add ticked bets to ledger", type="primary", disabled=not pedit.placed.any(), key="pb_add"):
+                    chosen = pedit[pedit.placed]
+                    ledger.add_bets(pd.DataFrame({
+                        "match_id": chosen.match_id, "start_time": chosen.start_time.astype(str),
+                        "event": chosen.market, "selection": chosen.selection, "opponent": chosen.match,
+                        "bookmaker": "PointsBet", "odds": chosen.odds, "stake": chosen.stake,
+                        "bet_prob": chosen.bet_prob, "ev": chosen.ev,
+                    }))
+                    st.session_state.log_version += 1
+                    st.toast(f"Logged {len(chosen)} bet(s).")
+                    st.rerun()
+
+        st.subheader("Every market")
+        staked = {}
+        if not to_bet.empty:
+            staked = dict(zip(to_bet.match_id + "|" + to_bet.market + "|" + to_bet.selection, to_bet.stake))
+        for m in sorted(pb_matches, key=lambda m: m.start_time):
+            table, info = priced[m.match_id]
+            start = m.start_time.tz_convert(settings.timezone)
+            with st.expander(f"{m.team_a} vs {m.team_b} - {start:%a %d %b %H:%M} - Bo{m.best_of}", expanded=True):
+                if info.get("model_series") is not None:
+                    mkt = info["market_series"]
+                    st.markdown(f"{m.team_a} to win: model **{info['model_series']:.0%}** (map {info['model_map']:.0%})"
+                                + (f" vs market **{mkt:.0%}**" if mkt is not None else ""))
+                if info.get("blocked"):
+                    st.warning(f"No bets on this match: {info['blocked']}.")
+                shown = table[table.kind.isin(KIND_LABELS)].copy()
+                if not shown.empty and info.get("model_series") is not None:
+                    shown["type"] = shown.kind.map(KIND_LABELS)
+                    shown["stake"] = [staked.get(f"{m.match_id}|{r.market}|{r.selection}", 0.0) for r in shown.itertuples()]
+                    st.dataframe(
+                        x100(shown, ["model_prob", "market_prob", "ev"]), hide_index=True,
+                        height=35 * (len(shown) + 1) + 3,
+                        column_order=["type", "selection", "odds", "model_prob", "market_prob", "ev", "stake", "reason"],
+                        column_config={
+                            "type": "Market", "selection": "Selection",
+                            "odds": st.column_config.NumberColumn("Odds", format="%.2f"),
+                            "model_prob": st.column_config.NumberColumn("Model", format="%.1f%%"),
+                            "market_prob": st.column_config.NumberColumn("Market", format="%.1f%%"),
+                            "ev": st.column_config.NumberColumn("EV", format="%+.1f%%"),
+                            "stake": st.column_config.NumberColumn("Stake", format="dollar"),
+                            "reason": "Not bet because",
+                        },
+                    )
+                n_unpriced = table[~table.kind.isin(KIND_LABELS)].market.nunique()
+                if n_unpriced:
+                    st.caption(f"{n_unpriced} more markets (kills, first blood, odd/even) aren't priced: "
+                               "the model has no per-game kill data yet.")
 
 with tab_slate:
     if not days:
@@ -395,7 +524,7 @@ with tab_elo:
             st.info("Pick two different teams.")
         else:
             p_map = ratings.model.predict_map(a, b)
-            p = series_win_prob(p_map, bo)
+            p = ratings.model.predict_series(a, b, bo)
             c = st.columns(2)
             c[0].metric(a, f"{p:.1%}", delta=f"fair odds {fair_odds(p):.2f}", delta_color="off", delta_arrow="off")
             c[1].metric(b, f"{1 - p:.1%}", delta=f"fair odds {fair_odds(1 - p):.2f}", delta_color="off", delta_arrow="off")

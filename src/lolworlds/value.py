@@ -12,12 +12,13 @@ head-to-head (match winner) prices.
 from __future__ import annotations
 
 import math
+import re
 
 import numpy as np
 import pandas as pd
 
 from .config import RiskProfile, Settings
-from .elo import EloModel, series_win_prob
+from .elo import EloModel
 
 ODDS_REQUIRED = ["match_id", "start_time", "team_a", "team_b", "bookmaker", "odds_a", "odds_b"]
 
@@ -93,8 +94,21 @@ def clean_odds(odds: pd.DataFrame, settings: Settings) -> pd.DataFrame:
 
 
 # -- team name matching -----------------------------------------------------
+_FILLER = {"esports", "esport", "e", "sports", "gaming", "team", "club", "gg", "the"}
+
+
+def _name_tokens(name: str) -> frozenset[str]:
+    tokens = re.findall(r"[a-z0-9]+", name.lower().replace("'", ""))
+    return frozenset(t for t in tokens if t not in _FILLER)
+
+
 def resolve_team(name: str, known: set[str], aliases: dict[str, str]) -> str | None:
-    """Map a bookmaker's team name onto a name the Elo model knows."""
+    """Map a bookmaker's team name onto a name the Elo model knows.
+
+    Tries an exact match, then ``team_aliases``, then case-insensitive, then a fuzzy
+    match on name words ignoring filler like "Esports"/"Gaming" (so "FURIA Esports"
+    finds "FURIA" and "Cloud9" finds "Cloud9 Kia"). The fuzzy match must be unique.
+    """
     name = name.strip()
     if name in known:
         return name
@@ -102,7 +116,13 @@ def resolve_team(name: str, known: set[str], aliases: dict[str, str]) -> str | N
     for candidate in (aliases.get(name), *(v for k, v in aliases.items() if k.lower() == name.lower())):
         if candidate and candidate.lower() in lowered:
             return lowered[candidate.lower()]
-    return lowered.get(name.lower())
+    if name.lower() in lowered:
+        return lowered[name.lower()]
+    mine = _name_tokens(name)
+    if not mine:
+        return None
+    hits = [k for k in known if (theirs := _name_tokens(k)) and (mine <= theirs or theirs <= mine)]
+    return hits[0] if len(hits) == 1 else None
 
 
 # -- match-level view -------------------------------------------------------
@@ -158,7 +178,7 @@ def add_model_probs(board: pd.DataFrame, model: EloModel, aliases: dict[str, str
             continue
         p_map = model.predict_map(r.model_team_a, r.model_team_b)
         maps.append(p_map)
-        probs.append(series_win_prob(p_map, int(r.best_of)))
+        probs.append(model.predict_series(r.model_team_a, r.model_team_b, int(r.best_of)))
     b["model_map_prob_a"] = maps
     b["model_prob_a"] = probs
     return b

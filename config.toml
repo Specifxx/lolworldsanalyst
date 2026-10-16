@@ -105,6 +105,11 @@ season_carryover = 0.75
 mov_gold_weight = 0.5
 mov_kill_weight = 0.25
 default_rating = 1400.0
+# How strongly maps within one series are linked (beta-binomial concentration).
+# Real series have more sweeps than independent maps predict (Bo5: 36.7% vs 30.9%);
+# 13 is the maximum-likelihood fit on 1,687 Bo3/Bo5 series from 2025-26.
+# Lower = more linked; 0 = treat maps as independent.
+series_concentration = 13.0
 
 # Starting rating for a team, by its home league. Major regions start higher so
 # the model doesn't need dozens of international games to learn the regional gap.

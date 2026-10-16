@@ -63,8 +63,7 @@ def expected_log_growth(fractions, probs, odds) -> float:
     return -np.inf if np.any(wealth <= 0) else float(scenario_prob @ np.log(wealth))
 
 
-def simultaneous_kelly(probs, odds, max_total: float = MAX_TOTAL_FRACTION,
-                       max_iter: int = 2000, tol: float = 1e-10) -> np.ndarray:
+def simultaneous_kelly(probs, odds, max_total: float = MAX_TOTAL_FRACTION) -> np.ndarray:
     """Full-Kelly fractions for independent bets placed at the same time."""
     p = np.asarray(probs, dtype=float)
     o = np.asarray(odds, dtype=float)
@@ -74,15 +73,31 @@ def simultaneous_kelly(probs, odds, max_total: float = MAX_TOTAL_FRACTION,
     if len(p) > MAX_EXACT_BETS:
         total = single.sum()
         return single * min(1.0, max_total / total) if total > 0 else single
-
     scenario_prob, returns = _scenarios(p, o)
+    return optimize_kelly(scenario_prob, returns, max_total, start=single * 0.5)
+
+
+def optimize_kelly(scenario_prob, returns, max_total: float = MAX_TOTAL_FRACTION, start=None,
+                   max_iter: int = 2000, tol: float = 1e-10) -> np.ndarray:
+    """Full-Kelly fractions for any set of bets on a shared bankroll.
+
+    ``scenario_prob`` (S,) are the probabilities of mutually exclusive outcomes and
+    ``returns`` (S, n) the profit per $1 on each bet in each outcome (``odds - 1`` win,
+    ``-1`` loss, ``0`` void). Correlated bets (e.g. several markets on one match) are
+    handled exactly: the optimiser sees that they win and lose together.
+    """
+    scenario_prob = np.asarray(scenario_prob, dtype=float)
+    returns = np.asarray(returns, dtype=float)
+    n = returns.shape[1]
+    if n == 0:
+        return np.zeros(0)
 
     def growth(f: np.ndarray) -> float:
         wealth = 1.0 + returns @ f
         return -np.inf if np.any(wealth <= 0) else float(scenario_prob @ np.log(wealth))
 
     # Projected gradient ascent with Armijo backtracking; the objective is concave.
-    f = _project(single * 0.5, max_total)
+    f = _project(np.zeros(n) if start is None else np.asarray(start, dtype=float), max_total)
     g_f, step = growth(f), 1.0
     for _ in range(max_iter):
         grad = returns.T @ (scenario_prob / (1.0 + returns @ f))
@@ -134,8 +149,14 @@ STAKE_COLUMNS = ["single_kelly", "full_kelly", "kelly_multiplier", "stake_pct", 
                  "to_return", "expected_profit", "notes"]
 
 
-def recommend_stakes(bets: pd.DataFrame, profile: RiskProfile, ctx: SizingContext) -> pd.DataFrame:
-    """Add stake recommendations to value bets (needs ``bet_prob``, ``odds`` and ``ev`` columns)."""
+def recommend_stakes(bets: pd.DataFrame, profile: RiskProfile, ctx: SizingContext,
+                     full_kelly: np.ndarray | None = None) -> pd.DataFrame:
+    """Add stake recommendations to value bets (needs ``bet_prob``, ``odds`` and ``ev`` columns).
+
+    Pass ``full_kelly`` when the bets are correlated and their joint full-Kelly fractions
+    were solved elsewhere (see ``markets.joint_kelly``); otherwise bets are treated as
+    independent.
+    """
     out = bets.copy().reset_index(drop=True)
     if out.empty or ctx.bankroll <= 0:
         for name in STAKE_COLUMNS:
@@ -144,7 +165,7 @@ def recommend_stakes(bets: pd.DataFrame, profile: RiskProfile, ctx: SizingContex
 
     p = out["bet_prob"].to_numpy(dtype=float)
     o = out["odds"].to_numpy(dtype=float)
-    full = simultaneous_kelly(p, o)
+    full = simultaneous_kelly(p, o) if full_kelly is None else np.asarray(full_kelly, dtype=float)
     mult, braked = kelly_multiplier(profile, ctx.bankroll, ctx.peak_bankroll)
     capped, per_bet_capped, exposure_scaled = apply_caps(full * mult, profile, ctx.bankroll, ctx.open_exposure)
 
